@@ -6,83 +6,127 @@
 //
 
 import SwiftUI
-import CoreData
+import Alamofire
 
 struct ContentView: View {
-    @Environment(\.managedObjectContext) private var viewContext
-
-    @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: true)],
-        animation: .default)
-    private var items: FetchedResults<Item>
-
+    @State private var input = "100"
+    @State private var base = "USD"
+    @State private var viewState: ViewStates = .loading
+    
+    private let cache = NSCache<NSString, NSArray>()
+    
+    func makeRequest(
+        showAll: Bool,
+        currencies: [String] = ["USD", "GBP", "EUR"]) async {
+            do {
+                let currency = try await apiRequest(url: "https://api.apilayer.com/fixer/latest?base=\(base)&amount=\(input)"
+                )
+                var tempList = [String]()
+                
+                for currency in currency.rates {
+                    if showAll {
+                        tempList.append("\(currency.key) \(String(format: "%.2f",currency.value))")
+                    } else if currencies.contains(currency.key)  {
+                        tempList.append("\(currency.key) \(String(format: "%.2f",currency.value))")
+                    }
+                    tempList.sort()
+                }
+                
+                viewState = .success(tempList)
+                cache.setObject(tempList as NSArray, forKey: "currency")
+            } catch {
+                print(error)
+                viewState = .error(error)
+            }
+        }
+    
     var body: some View {
-        NavigationView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp!, formatter: itemFormatter)")
-                    } label: {
-                        Text(item.timestamp!, formatter: itemFormatter)
+        switch viewState {
+        case .success(let info):
+            succsses(info)
+        case .error(_):
+            failure
+        case .loading:
+            loading
+                .onAppear {
+                    Task {
+                        await makeRequest(showAll: true)
                     }
                 }
-                .onDelete(perform: deleteItems)
+        }
+    }
+    
+    private func succsses(_ info: [String]) -> some View {
+        VStack {
+            HStack {
+                Text("Currencies")
+                    .font(.system(size: 32))
+                    .bold()
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
+            
+            NavigationView {
+                VStack {
+                    List {
+                        ForEach(info, id: \.self) { currency in
+                            NavigationLink {
+                                CurrencyDetail(money: String(currency))
+                            } label: {
+                                Text(currency)
+                            }
+                            .navigationTitle("Available currencies")
+                        }
                     }
+                    .scrollContentBackground(.hidden)
+                    .background(Color.background)
+                    
+                    Divider()
+                    
+                    VStack {
+                        VStack(spacing: 16) {
+                            
+                            TextField("Enter a currency" ,text: $base)
+                        }
+                        .textFieldStyle(CustomTextFieldStyle())
+                        
+                        Button("Convert!") {
+                            Task {
+                                await makeRequest(showAll: true)
+                            }
+                        }
+                    }
+                    .padding()
                 }
             }
-            Text("Select an item")
+        }
+        .background(Color.background)
+    }
+    
+    var failure: some View {
+        VStack(spacing: 100) {
+            Text("Couldn't load currencies")
+            
+            Button {
+                Task {
+                    await makeRequest(showAll: true)
+                }
+            } label: {
+                HStack {
+                    Text("Reload")
+                    
+                    Image(systemName: "arrow.2.circlepath")
+                }
+            }
+
         }
     }
-
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(context: viewContext)
-            newItem.timestamp = Date()
-
-            do {
-                try viewContext.save()
-            } catch {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                let nsError = error as NSError
-                fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
-            }
-        }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            offsets.map { items[$0] }.forEach(viewContext.delete)
-
-            do {
-                try viewContext.save()
-            } catch {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                let nsError = error as NSError
-                fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
-            }
-        }
+    
+    var loading: some View {
+        ProgressView()
     }
 }
 
-private let itemFormatter: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.dateStyle = .short
-    formatter.timeStyle = .medium
-    return formatter
-}()
-
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
-        ContentView().environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
+        ContentView()
     }
 }
